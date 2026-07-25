@@ -10,10 +10,10 @@ const ROM = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
   "XXI", "XXII", "XXIII", "XXIV", "XXV"];
 const TITLES: [string, string][] = [
   ["", ""],
-  ["The Whispering Wood", "learn to breathe quietly"],
-  ["Thorns and Patience", "the ground keeps teeth"],
-  ["The Crouching Tribe", "you are being watched"],
-  ["Canopy of Teeth", "rope, or fall"],
+  ["The Whispering Wood", "first steps in the dark"],
+  ["Thorns and Patience", "the ground keeps secrets"],
+  ["The Crouching Tribe", "watched from the ferns"],
+  ["Canopy of Teeth", "swing, or fall"],
   ["The Drowned Path", "wood floats, you do not"],
   ["Hollow of Bone", "the caves remember"],
   ["Webbed Arches", "nothing here is empty"],
@@ -61,13 +61,23 @@ export interface LevelData {
 }
 
 const G = 520;
-const GAP = new Set(["pit", "rope", "invis", "water", "magPit", "mplat"]);
-type Beat = [string, ...number[]];
-interface Ctx { x: number; onGround: boolean; id: number; }
+const JMAX = 110; // max pure-jump gap — clearable even at walk speed
 
-function base(chapter: number): LevelData {
+function mulberry32(a: number) {
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+type Rng = () => number;
+interface C { x: number; id: number; }
+type Seg = (L: LevelData, c: C, r: Rng) => boolean; // returns ended-on-ground
+
+function base(n: number): LevelData {
   return {
-    chapter, theme: THEMES[chapter] || "mist", width: 0, groundY: G, girl: false,
+    chapter: n, theme: THEMES[n] || "mist", width: 0, groundY: G, girl: false,
     spawn: { x: 60, y: G - 60 }, goal: { x: 0, y: 0, w: 0, h: 0 },
     solids: [], crates: [], floats: [], cages: [], doors: [], plates: [], levers: [],
     saws: [], boulders: [], ropes: [], spikes: [], water: [], invisibles: [],
@@ -75,159 +85,131 @@ function base(chapter: number): LevelData {
     magnets: [], gravZones: [], spiders: [], whispers: [], checkpoints: [],
   };
 }
-const mb = (x: number, y: number, w: number, h: number, buoyant = false): Body =>
-  ({ x, y, w, h, vx: 0, vy: 0, buoyant, onGround: false });
+const ri = (r: Rng, a: number, b: number) => a + Math.floor(r() * (b - a + 1));
+const ground = (L: LevelData, c: C, len: number) => { L.solids.push({ x: c.x, y: G, w: len, h: 400 }); c.x += len; };
+const pit = (L: LevelData, x: number, w: number) => {
+  L.spikes.push({ x, y: G + 10, w, h: 30 }); L.solids.push({ x, y: G + 40, w, h: 360 });
+};
 
-function pad(L: LevelData, c: Ctx, len: number) {
-  if (len <= 0) return;
-  L.solids.push({ x: c.x, y: G, w: len, h: 400 });
-  c.x += len; c.onGround = true;
+// ----- fair segments -----
+const segJump: Seg = (L, c, r) => { const w = ri(r, 70, JMAX); pit(L, c.x, w); c.x += w; return false; };
+const segRope: Seg = (L, c, r) => { const w = ri(r, 150, 240); pit(L, c.x, w); L.ropes.push({ px: c.x + 88, py: 130, len: 380, angle: -0.25, angVel: 0 }); c.x += w; return false; };
+const segInvis: Seg = (L, c, r) => {
+  const n = ri(r, 2, 4); const stepW = 120, sp = 190, span = n * sp;
+  pit(L, c.x, span); let ry = G - 70;
+  for (let i = 0; i < n; i++) { L.invisibles.push({ x: c.x + 30 + i * sp, y: ry, w: stepW, h: 18 }); ry -= 40; }
+  c.x += span; return false;
+};
+const segMplat: Seg = (L, c, r) => {
+  const w = ri(r, 150, 230); const pw = 110; const range = (w - 30) / 2; const px = c.x - 40 + range;
+  pit(L, c.x, w); L.platforms.push({ x: px, y: G - 18, w: pw, h: 18, px, py: G - 18, axis: "x", range, speed: 1.0, phase: 0 });
+  c.x += w; return false;
+};
+const segWater: Seg = (L, c, r) => {
+  const w = ri(r, 260, 420); const top = G - 80;
+  L.solids.push({ x: c.x, y: G + 180, w, h: 220 }); L.water.push({ x: c.x, y: top, w, h: 260 });
+  for (let fx = c.x + 120; fx + 100 < c.x + w - 60; fx += 170)
+    L.floats.push({ x: fx, y: top - 24, w: 100, h: 40, vx: 0, vy: 0, buoyant: true, onGround: false });
+  c.x += w; return false;
+};
+const segSawLane: Seg = (L, c, r) => {
+  const n = ri(r, 1, 3); const len = n * 150 + 120; ground(L, c, len);
+  for (let i = 0; i < n; i++) L.saws.push({ cx: c.x - len + 100 + i * 150, cy: G - 90, r: 34, axis: "y", range: 70, speed: 1.6 + i * 0.3, phase: i * 1.3, angle: 0 });
+  return true;
+};
+const segSparkLane: Seg = (L, c, r) => {
+  const n = ri(r, 2, 4); const per = 1.8 + r() * 0.6; const len = n * 130 + 120; ground(L, c, len);
+  for (let i = 0; i < n; i++) L.sparks.push({ x: c.x - len + 90 + i * 130, y: G - 180, w: 26, h: 180, period: per, phase: (i * per) / n });
+  return true;
+};
+const segConvey: Seg = (L, c, r) => {
+  const len = ri(r, 240, 340); const dir = (r() < 0.5 ? 1 : -1) as 1 | -1; const total = len + 140;
+  ground(L, c, total); L.conveyors.push({ x: c.x - len + 20, y: G - 12, w: len - 40, h: 12, dir, on: true, phase: 0 });
+  return true;
+};
+const segTimed: Seg = (L, c, r) => {
+  const sec = 1.7 + r() * 0.7; const saw = r() < 0.6; const id = c.id++; ground(L, c, 420);
+  const s0 = c.x - 420; const lx = s0 + 60, dx = s0 + 230, sx = s0 + 310;
+  L.levers.push({ x: lx, y: G, id, on: false, timed: sec });
+  const gc = G - 220; L.doors.push({ x: dx, y: gc, w: 30, h: 220, open: false, link: id, yClosed: gc, yOpen: gc - 220 });
+  if (saw) L.saws.push({ cx: sx, cy: G - 90, r: 34, axis: "y", range: 70, speed: 2.2, phase: 0, angle: 0 });
+  return true;
+};
+const segPlate: Seg = (L, c, _r) => {
+  const id = c.id++; ground(L, c, 300); const s0 = c.x - 300;
+  L.crates.push({ x: s0 + 70, y: G - 56, w: 56, h: 56, vx: 0, vy: 0, onGround: false });
+  L.plates.push({ x: s0 + 180, y: G - 14, w: 80, h: 14, id, pressed: false });
+  const gc = G - 220; L.doors.push({ x: s0 + 250, y: gc, w: 26, h: 220, open: false, link: id, yClosed: gc, yOpen: gc - 220 });
+  return true;
+};
+const segClimb: Seg = (L, c, r) => {
+  const pw = ri(r, 130, 150); ground(L, c, 240); const s0 = c.x - 240;
+  L.cages.push({ x: s0 + 90, y: G - 100, w: 70, h: 100, vx: 0, vy: 0, onGround: false });
+  L.solids.push({ x: s0 + 200, y: G - 100, w: 30, h: 100 });
+  pit(L, c.x, pw); L.solids.push({ x: s0 + 200, y: 340, w: pw + 120, h: 40 });
+  c.x += pw; return false;
+};
+const segMagBonus: Seg = (L, c, r) => {
+  const w = ri(r, 80, JMAX); pit(L, c.x, w); L.magnets.push({ x: c.x + w / 2, y: G - 230, r: 170, strength: 420 });
+  c.x += w; return false;
+};
+const segGrav: Seg = (L, c, r) => {
+  const w = ri(r, 300, 440); ground(L, c, w + 120); const zx = c.x - (w + 120) + 60, zw = w - 60;
+  if (r() < 0.5) L.invisibles.push({ x: zx, y: 90, w: zw, h: 18 }); else L.solids.push({ x: zx, y: 80, w: zw, h: 30 });
+  L.gravZones.push({ x: zx, y: 0, w: zw, h: 800, dir: -1 });
+  L.saws.push({ cx: zx + zw / 2, cy: 150, r: 30, axis: "x", range: Math.max(40, zw / 2 - 50), speed: 1.6, phase: 0, angle: 0 });
+  return true;
+};
+const segBoulder: Seg = (L, c, r) => {
+  const len = ri(r, 320, 460); ground(L, c, len); const ge = c.x; const w = ri(r, 80, JMAX);
+  pit(L, ge, w);
+  L.boulders.push({ x: ge - len + 40, y: 40, r: 34, vx: 0, vy: 0, triggerX: ge - 70, released: false, startX: ge - len + 40, startY: 40, angle: 0 });
+  c.x = ge + w; return false;
+};
+const segSpider: Seg = (L, c, r) => {
+  const n = ri(r, 1, 3); const len = n * 150 + 120; ground(L, c, len);
+  for (let i = 0; i < n; i++) L.spiders.push({ x: c.x - len + 100 + i * 150, ceilingY: 30, y: 50, restY: 50, triggered: false, vy: 0, phase: i });
+  return true;
+};
+const segBear: Seg = (L, c, r) => {
+  const len = ri(r, 220, 340); ground(L, c, len); const n = ri(r, 1, 2);
+  for (let i = 0; i < n; i++) { const bx = c.x - len + 60 + Math.floor(r() * (len - 120)); L.bearTraps.push({ x: bx, y: G - 10, w: 46, hidden: true, sprung: false, timer: 0 }); }
+  return true;
+};
+
+const POOLS: Record<Theme, Seg[]> = {
+  mist: [segJump, segRope],
+  forest: [segJump, segRope, segBear, segSpider, segClimb, segWater, segMagBonus],
+  ruins: [segJump, segInvis, segMplat, segPlate, segSpider, segClimb, segWater, segSawLane],
+  factory: [segSawLane, segSparkLane, segConvey, segTimed, segMagBonus, segJump, segGrav, segClimb, segPlate, segBoulder],
+  void: [segGrav, segInvis, segMagBonus, segJump, segSparkLane, segSawLane, segClimb, segMplat],
+};
+function poolFor(n: number): Seg[] {
+  let p = POOLS[THEMES[n] || "forest"].slice();
+  if (n <= 1) p = p.filter((s) => s !== segBear && s !== segBoulder && s !== segGrav && s !== segTimed && s !== segSparkLane && s !== segInvis && s !== segMplat && s !== segPlate && s !== segSawLane);
+  else if (n <= 3) p = p.filter((s) => s !== segGrav && s !== segTimed && s !== segSparkLane);
+  else if (n <= 6) p = p.filter((s) => s !== segGrav);
+  if (p.length === 0) p = [segJump, segRope];
+  return p;
 }
 
-function applyBeat(L: LevelData, b: Beat, c: Ctx) {
-  const t = b[0];
-  const x = c.x;
-  switch (t) {
-    case "ground": case "run": pad(L, c, b[1]); return;
-    case "bear": {
-      const n = b[1]; const span = n * 180 + 120;
-      L.solids.push({ x, y: G, w: span, h: 400 });
-      for (let i = 0; i < n; i++) L.bearTraps.push({ x: x + 80 + i * 180, y: G - 10, w: 46, hidden: true, sprung: false, timer: 0 });
-      c.x += span; c.onGround = true; return;
-    }
-    case "spider": {
-      const n = b[1]; const span = n * 150 + 120;
-      L.solids.push({ x, y: G, w: span, h: 400 });
-      for (let i = 0; i < n; i++) L.spiders.push({ x: x + 100 + i * 150, ceilingY: 30, y: 50, restY: 50, triggered: false, vy: 0, phase: i });
-      c.x += span; c.onGround = true; return;
-    }
-    case "sawsG": {
-      const n = b[1]; const span = n * 150 + 140;
-      L.solids.push({ x, y: G, w: span, h: 400 });
-      for (let i = 0; i < n; i++) L.saws.push({ cx: x + 100 + i * 150, cy: G - 30, r: 38, axis: "y", range: 70, speed: 2.2 + i * 0.2, phase: i * 0.8, angle: 0 });
-      c.x += span; c.onGround = true; return;
-    }
-    case "sparks": {
-      const n = b[1]; const per = b[2] || 1.8; const span = n * 140 + 140;
-      L.solids.push({ x, y: G, w: span, h: 400 });
-      for (let i = 0; i < n; i++) L.sparks.push({ x: x + 90 + i * 140, y: G - 180, w: 26, h: 180, period: per, phase: (i * per) / n });
-      c.x += span; c.onGround = true; return;
-    }
-    case "conv": {
-      const w = b[1]; const dir = (b[2] || 1) as 1 | -1; const n = b[3] || 2;
-      L.solids.push({ x, y: G, w: w + 120, h: 400 });
-      L.conveyors.push({ x: x + 40, y: G - 12, w: w - 80, h: 12, dir, on: true, phase: 0 });
-      for (let i = 0; i < n; i++) L.saws.push({ cx: x + 40 + ((i + 1) * (w - 80)) / (n + 1), cy: G - 90, r: 36, axis: "y", range: 70, speed: 2.4 + i * 0.2, phase: i * 0.7, angle: 0 });
-      c.x += w + 120; c.onGround = true; return;
-    }
-    case "beltKill": {
-      const w = b[1]; const dir = (b[2] || 1) as 1 | -1; const id = c.id++;
-      L.solids.push({ x, y: G, w: w + 220, h: 400 });
-      L.levers.push({ x: x + 60, y: G, id, on: false });
-      L.conveyors.push({ x: x + 150, y: G - 12, w: w - 120, h: 12, dir, on: true, link: id, phase: 0 });
-      L.saws.push({ cx: x + w + 40, cy: G - 90, r: 40, axis: "y", range: 70, speed: 2.2, phase: 0, angle: 0 });
-      c.x += w + 220; c.onGround = true; return;
-    }
-    case "timedGate": {
-      const sec = b[1]; const saw = b[2]; const id = c.id++;
-      L.solids.push({ x, y: G, w: 540, h: 400 });
-      L.levers.push({ x: x + 80, y: G, id, on: false, timed: sec });
-      const gc = G - 220;
-      L.doors.push({ x: x + 250, y: gc, w: 30, h: 220, open: false, link: id, yClosed: gc, yOpen: gc - 220 });
-      if (saw) L.saws.push({ cx: x + 350, cy: G - 90, r: 36, axis: "y", range: 70, speed: 2.6, phase: 0, angle: 0 });
-      c.x += 540; c.onGround = true; return;
-    }
-    case "plate": {
-      const id = c.id++;
-      L.solids.push({ x, y: G, w: 480, h: 400 });
-      L.crates.push(mb(x + 80, G - 56, 56, 56));
-      L.plates.push({ x: x + 250, y: G - 14, w: 80, h: 14, id, pressed: false });
-      const gc = G - 220;
-      L.doors.push({ x: x + 400, y: gc, w: 26, h: 220, open: false, link: id, yClosed: gc, yOpen: gc - 220 });
-      c.x += 480; c.onGround = true; return;
-    }
-    case "magNudge": {
-      const str = b[1] || -320;
-      L.solids.push({ x, y: G, w: 380, h: 400 });
-      L.magnets.push({ x: x + 180, y: G - 40, r: 165, strength: str });
-      L.saws.push({ cx: x + 310, cy: G - 90, r: 38, axis: "y", range: 70, speed: 2.4, phase: 0.5, angle: 0 });
-      c.x += 380; c.onGround = true; return;
-    }
-    case "boulder": {
-      const len = b[1];
-      L.solids.push({ x, y: G, w: len + 200, h: 400 });
-      L.boulders.push({ x: x + 40, y: 40, r: 34, vx: 0, vy: 0, triggerX: x + 130, released: false, startX: x + 40, startY: 40, angle: 0 });
-      c.x += len + 200; c.onGround = true; return;
-    }
-    case "climb": {
-      const pitW = b[1];
-      L.solids.push({ x, y: G, w: 300, h: 400 });
-      L.cages.push(mb(x + 100, G - 100, 70, 100));
-      L.solids.push({ x: x + 240, y: G - 100, w: 30, h: 100 });
-      L.spikes.push({ x: x + 300, y: G + 10, w: pitW, h: 30 });
-      L.solids.push({ x: x + 300, y: G + 40, w: pitW, h: 360 });
-      L.solids.push({ x: x + 240, y: 340, w: pitW + 100, h: 40 });
-      L.solids.push({ x: x + 300 + pitW, y: G, w: 200, h: 400 });
-      c.x += 300 + pitW + 200; c.onGround = true; return;
-    }
-    case "grav": {
-      const w = b[1]; const inv = b[2];
-      L.solids.push({ x, y: G, w: w + 120, h: 400 });
-      const zx = x + 60; const zw = w - 60;
-      if (inv) L.invisibles.push({ x: zx, y: 90, w: zw, h: 18 });
-      else L.solids.push({ x: zx, y: 80, w: zw, h: 30 });
-      L.gravZones.push({ x: zx, y: 0, w: zw, h: 800, dir: -1 });
-      L.saws.push({ cx: zx + zw / 2, cy: 150, r: 32, axis: "x", range: Math.max(40, zw / 2 - 40), speed: 1.8, phase: 0, angle: 0 });
-      c.x += w + 120; c.onGround = true; return;
-    }
-    case "cp":
-      L.checkpoints.push({ x: Math.max(40, c.x - 30), y: G - 60 });
-      return;
-    case "pit":
-      L.spikes.push({ x, y: G + 10, w: b[1], h: 30 });
-      L.solids.push({ x, y: G + 40, w: b[1], h: 360 });
-      c.x += b[1]; c.onGround = false; return;
-    case "rope":
-      L.spikes.push({ x, y: G + 10, w: b[1], h: 30 });
-      L.solids.push({ x, y: G + 40, w: b[1], h: 360 });
-      L.ropes.push({ px: x + 88, py: 130, len: 380, angle: -0.25, angVel: 0 });
-      c.x += b[1]; c.onGround = false; return;
-    case "invis": {
-      const steps = b[1]; const span = steps * 200;
-      L.spikes.push({ x, y: G + 10, w: span, h: 30 });
-      L.solids.push({ x, y: G + 40, w: span, h: 360 });
-      for (let i = 0; i < steps; i++) L.invisibles.push({ x: x + 30 + i * 200, y: G - 70 - i * 46, w: 130, h: 18 });
-      c.x += span; c.onGround = false; return;
-    }
-    case "water": {
-      const w = b[1]; const n = b[2] || 4; const top = G - 80;
-      L.solids.push({ x, y: G + 180, w, h: 220 });
-      L.water.push({ x, y: top, w, h: 260 });
-      const inner = w / (n + 1);
-      for (let i = 0; i < n; i++) L.floats.push(mb(x + inner * (i + 1) - 45, top - 24, 90, 40, true));
-      c.x += w; c.onGround = false; return;
-    }
-    case "magPit": {
-      const w = b[1]; const str = b[2] || 560;
-      L.spikes.push({ x, y: G + 10, w, h: 30 });
-      L.solids.push({ x, y: G + 40, w, h: 360 });
-      L.magnets.push({ x: x + w / 2, y: G - 240, r: Math.max(180, w * 0.6), strength: str });
-      c.x += w; c.onGround = false; return;
-    }
-    case "mplat": {
-      const pitW = b[1]; const pw = 110; const range = Math.max(60, (pitW - 50) / 2);
-      const px = x - 30 + range;
-      L.spikes.push({ x, y: G + 10, w: pitW, h: 30 });
-      L.solids.push({ x, y: G + 40, w: pitW, h: 360 });
-      L.platforms.push({ x: px, y: G - 18, w: pw, h: 18, px, py: G - 18, axis: "x", range, speed: 1.0, phase: 0 });
-      c.x += pitW; c.onGround = false; return;
-    }
-    default: return;
+// scatter hidden bear-traps on long safe ground runs (die-once-to-learn, varied positions)
+function addRandomHiddenTraps(L: LevelData, r: Rng, n: number) {
+  if (n < 2) return;
+  const prob = Math.min(0.8, 0.12 + n * 0.03);
+  const grounds = L.solids.filter((s) => s.y === G && s.w > 240);
+  for (const s of grounds) {
+    if (r() > prob) continue;
+    if (L.bearTraps.some((b) => b.x > s.x - 10 && b.x < s.x + s.w + 10)) continue;
+    const lo = s.x + 50, hi = s.x + s.w - 50 - 46; if (hi <= lo) continue;
+    const bx = lo + Math.floor(r() * (hi - lo));
+    if (L.spikes.some((sp) => Math.abs(sp.x - (bx + 23)) < 70 || Math.abs(sp.x + sp.w - (bx + 23)) < 70)) continue;
+    L.bearTraps.push({ x: bx, y: G - 10, w: 46, hidden: true, sprung: false, timer: 0 });
   }
 }
 
 const WHISP: Record<Theme, string[]> = {
-  mist: ["walk right. jump the gap. hold GRAB to push."],
+  mist: ["walk right. jump the gap. hold grab to push."],
   forest: ["The leaves keep their own counsel.", "Something watches from the ferns.", "Don't trust the quiet.", "The tribe remembers your footsteps.", "Webs are never empty here."],
   ruins: ["Stone remembers the living.", "Bones do not lie.", "The dark drips.", "A giant patience waits above."],
   factory: ["The machines do not sleep.", "Sparks keep a cruel clock.", "Gravity is a lever here.", "The belt has no mercy."],
@@ -235,61 +217,38 @@ const WHISP: Record<Theme, string[]> = {
 };
 function scatterWhispers(L: LevelData) {
   const pool = WHISP[L.theme] || WHISP.mist;
-  const spots = [0.3, 0.55, 0.82];
-  for (let i = 0; i < spots.length; i++) {
-    const px = L.width * spots[i];
-    if (px > 120 && px < L.width - 120) L.whispers.push({ x: px, text: pool[(L.chapter + i) % pool.length] });
+  for (const f of [0.28, 0.52, 0.78]) {
+    const px = L.width * f;
+    if (px > 120 && px < L.width - 120) L.whispers.push({ x: px, text: pool[(L.chapter + Math.round(f * 7)) % pool.length] });
   }
 }
 
-const LEVELS: Beat[][] = [
-  [], // 0 unused
-  [["ground", 220], ["pit", 130], ["ground", 160], ["bear", 1], ["ground", 160], ["pit", 150], ["ground", 160], ["spider", 1], ["ground", 180], ["cp"], ["rope", 300], ["ground", 220]],
-  [["ground", 180], ["pit", 150], ["sawsG", 1], ["ground", 160], ["plate"], ["ground", 160], ["bear", 2], ["ground", 160], ["cp"], ["pit", 170], ["ground", 160], ["rope", 320], ["ground", 220]],
-  [["ground", 160], ["spider", 2], ["ground", 140], ["climb", 300], ["ground", 140], ["boulder", 420], ["ground", 140], ["cp"], ["pit", 180], ["ground", 160], ["bear", 2], ["ground", 220]],
-  [["ground", 140], ["bear", 2], ["ground", 120], ["pit", 190], ["ground", 120], ["rope", 360], ["ground", 120], ["spider", 2], ["ground", 120], ["cp"], ["sawsG", 2], ["ground", 120], ["pit", 200], ["ground", 220]],
-  [["ground", 140], ["water", 720, 4], ["ground", 140], ["magNudge", -300], ["ground", 120], ["cp"], ["timedGate", 2.6, 1], ["ground", 120], ["bear", 3], ["ground", 120], ["rope", 380], ["ground", 220]],
-  [["ground", 140], ["mplat", 420], ["ground", 140], ["invis", 3], ["ground", 140], ["plate"], ["ground", 120], ["cp"], ["spider", 2], ["ground", 120], ["pit", 190], ["ground", 220]],
-  [["ground", 120], ["climb", 320], ["ground", 120], ["invis", 4], ["ground", 120], ["cp"], ["timedGate", 2.4, 1], ["ground", 120], ["bear", 2], ["ground", 120], ["pit", 200], ["ground", 220]],
-  [["ground", 120], ["mplat", 440], ["ground", 120], ["water", 760, 4], ["ground", 120], ["boulder", 440], ["ground", 120], ["cp"], ["bear", 2], ["ground", 220]],
-  [["ground", 120], ["invis", 4], ["ground", 120], ["grav", 480, 0], ["ground", 120], ["plate"], ["ground", 120], ["cp"], ["spider", 3], ["ground", 120], ["pit", 200], ["ground", 220]],
-  [["ground", 120], ["conv", 420, 1, 2], ["ground", 120], ["sparks", 4, 1.8], ["ground", 120], ["beltKill", 420, 1], ["ground", 120], ["cp"], ["sawsG", 2], ["ground", 220]],
-  [["ground", 120], ["grav", 520, 0], ["ground", 120], ["timedGate", 2.2, 1], ["ground", 120], ["magNudge", -340], ["ground", 120], ["cp"], ["conv", 420, -1, 2], ["ground", 220]],
-  [["ground", 120], ["sparks", 5, 1.5], ["ground", 120], ["beltKill", 440, 1], ["ground", 120], ["grav", 480, 1], ["ground", 120], ["cp"], ["boulder", 460], ["ground", 220]],
-  [["ground", 120], ["conv", 440, 1, 2], ["ground", 120], ["magPit", 380, 540], ["ground", 120], ["timedGate", 2.0, 1], ["ground", 120], ["cp"], ["invis", 3], ["ground", 220]],
-  [["ground", 120], ["beltKill", 440, 1], ["ground", 120], ["sparks", 4, 1.4], ["ground", 120], ["conv", 440, -1, 2], ["ground", 120], ["cp"], ["grav", 560, 1], ["ground", 220]],
-  [["ground", 120], ["grav", 520, 1], ["ground", 120], ["invis", 4], ["ground", 120], ["magPit", 380, 560], ["ground", 120], ["cp"], ["grav", 480, 0], ["ground", 220]],
-  [["ground", 120], ["invis", 5], ["ground", 120], ["grav", 560, 1], ["ground", 120], ["magNudge", -360], ["ground", 120], ["cp"], ["invis", 4], ["ground", 220]],
-  [["ground", 120], ["grav", 520, 1], ["ground", 120], ["invis", 5], ["ground", 120], ["magPit", 400, 580], ["ground", 120], ["cp"], ["sparks", 4, 1.4], ["ground", 220]],
-  [["ground", 110], ["timedGate", 1.8, 1], ["ground", 110], ["beltKill", 440, 1], ["ground", 110], ["sparks", 5, 1.4], ["ground", 110], ["cp"], ["conv", 440, 1, 2], ["ground", 110], ["magNudge", -360], ["ground", 220]],
-  [["ground", 110], ["conv", 440, -1, 2], ["ground", 110], ["beltKill", 440, 1], ["ground", 110], ["grav", 520, 1], ["ground", 110], ["cp"], ["timedGate", 1.8, 1], ["ground", 110], ["invis", 3], ["ground", 220]],
-  [["ground", 110], ["invis", 6], ["ground", 110], ["grav", 560, 1], ["ground", 110], ["magPit", 400, 580], ["ground", 110], ["cp"], ["invis", 5], ["ground", 220]],
-  [["ground", 110], ["grav", 520, 1], ["ground", 110], ["invis", 5], ["ground", 110], ["magPit", 400, 580], ["ground", 110], ["grav", 480, 1], ["ground", 110], ["cp"], ["sparks", 4, 1.3], ["ground", 220]],
-  [["ground", 100], ["beltKill", 440, 1], ["ground", 100], ["sparks", 5, 1.3], ["ground", 100], ["conv", 440, -1, 2], ["ground", 100], ["cp"], ["timedGate", 1.6, 1], ["ground", 100], ["magNudge", -380], ["ground", 100], ["invis", 3], ["ground", 220]],
-  [["ground", 100], ["invis", 6], ["ground", 100], ["grav", 560, 1], ["ground", 100], ["magPit", 420, 600], ["ground", 100], ["cp"], ["invis", 5], ["ground", 100], ["grav", 480, 1], ["ground", 220]],
-  [["ground", 100], ["conv", 440, 1, 2], ["ground", 100], ["beltKill", 440, 1], ["ground", 100], ["sparks", 5, 1.2], ["ground", 100], ["cp"], ["timedGate", 1.6, 1], ["ground", 100], ["magNudge", -400], ["ground", 100], ["grav", 520, 1], ["ground", 100], ["invis", 4], ["ground", 220]],
-  [["ground", 100], ["grav", 520, 1], ["ground", 90], ["invis", 5], ["ground", 90], ["magPit", 420, 600], ["ground", 90], ["sparks", 5, 1.2], ["ground", 90], ["cp"], ["timedGate", 1.5, 1], ["ground", 90], ["grav", 560, 1], ["ground", 90], ["invis", 6], ["ground", 90], ["magNudge", -420], ["ground", 90], ["cp"], ["conv", 460, -1, 3], ["ground", 90], ["invis", 5], ["ground", 240]],
-];
-
-function buildFromBeats(chapter: number, beats: Beat[], girl = false): LevelData {
-  const L = base(chapter);
-  const c: Ctx = { x: 0, onGround: false, id: 1 };
-  pad(L, c, 220);
-  for (const b of beats) {
-    if (GAP.has(b[0]) && !c.onGround) pad(L, c, 140);
-    if (b[0] === "cp" && !c.onGround) pad(L, c, 120);
-    applyBeat(L, b, c);
+function makeLevel(n: number): LevelData {
+  const r = mulberry32(n * 99991 + 7);
+  const L = base(n);
+  const c: C = { x: 0, id: 1 };
+  ground(L, c, 200);
+  const pool = poolFor(n);
+  const segCount = 4 + Math.floor(n * 0.42);
+  let sinceCp = 0, lastGround = true;
+  for (let i = 0; i < segCount; i++) {
+    ground(L, c, lastGround ? ri(r, 80, 130) : ri(r, 110, 160));
+    lastGround = true;
+    const seg = pool[Math.floor(r() * pool.length)];
+    lastGround = seg(L, c, r);
+    if (++sinceCp >= 3 && lastGround) { L.checkpoints.push({ x: c.x - 30, y: G - 60 }); sinceCp = 0; }
   }
-  if (!c.onGround) pad(L, c, 160);
-  pad(L, c, 240);
-  L.width = c.x + 200;
-  L.goal = { x: c.x - 120, y: G - 150, w: 70, h: 150 };
-  L.girl = girl;
+  if (!lastGround) ground(L, c, ri(r, 120, 160));
+  ground(L, c, 180);
+  L.checkpoints.push({ x: c.x - 120, y: G - 60 });
+  addRandomHiddenTraps(L, r, n);
   scatterWhispers(L);
+  L.width = c.x + 200;
+  L.goal = { x: c.x - 110, y: G - 150, w: 70, h: 150 };
+  L.girl = n === 25;
   return L;
 }
 
 export function buildChapter(n: number): LevelData {
-  const idx = Math.max(1, Math.min(LEVELS.length - 1, n));
-  return buildFromBeats(idx, LEVELS[idx], idx === 25);
+  return makeLevel(Math.max(1, Math.min(25, n)));
 }
