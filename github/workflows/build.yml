@@ -1,0 +1,28 @@
+name: Build Android APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install && npm run build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - run: npm install @capacitor/core @capacitor/cli @capacitor/android
+      - run: npx cap add android
+      - run: npx cap sync android
+      - name: Fix Kotlin version conflict
+        run: echo "allprojects { configurations.all { resolutionStrategy { force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22' } } }" >> android/build.gradle
+      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: umbra-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
