@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+:root {
+  --face-display: "Cormorant Garamond", "Times New Roman", serif;
+  --face-body: "IBM Plex Mono", ui-monospace, monospace;
+  --bone: #d9d4c8;
+  --ash: #6b6a66;
+  --blood: #b81a1a;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: #000;
+  color: var(--bone);
+  font-family: var(--face-body);
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+.font-display {
+  font-family: var(--face-display);
+  font-weight: 300;
+}
+.font-body {
+  font-family: var(--face-body);
+}
+
+/* Title-screen ambience: slow drifting fog banks + ash */
+@keyframes umbra-drift {
+  0% {
+    transform: translate3d(-6%, 0, 0);
+  }
+  100% {
+    transform: translate3d(6%, 0, 0);
+  }
+}
+@keyframes umbra-drift-rev {
+  0% {
+    transform: translate3d(4%, 2%, 0);
+  }
+  100% {
+    transform: translate3d(-5%, -1%, 0);
+  }
+}
+@keyframes umbra-fall {
+  0% {
+    transform: translateY(-10vh) translateX(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateY(110vh) translateX(22px);
+    opacity: 0;
+  }
+}
+@keyframes umbra-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+@keyframes umbra-whisper {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+    letter-spacing: 0.5em;
+  }
+  18%,
+  78% {
+    opacity: 0.85;
+    transform: translateY(0);
+    letter-spacing: 0.32em;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+    letter-spacing: 0.32em;
+  }
+}
+@keyframes umbra-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+@keyframes umbra-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes umbra-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  47% {
+    opacity: 1;
+  }
+  48% {
+    opacity: 0.4;
+  }
+  49% {
+    opacity: 1;
+  }
+  72% {
+    opacity: 0.7;
+  }
+  73% {
+    opacity: 1;
+  }
+}
+
+.umbra-grain {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+}
