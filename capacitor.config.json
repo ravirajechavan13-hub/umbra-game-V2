@@ -1,0 +1,21 @@
+{
+  "appId": "com.raviraje.umbra",
+  "appName": "Umbra",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "backgroundColor": "#0a0a0a",
+  "android": {
+    "allowMixedContent": true
+  },
+  "ios": {
+    "contentInset": "always"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#0a0a0a",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    }
+  }
+}
